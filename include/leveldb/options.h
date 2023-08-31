@@ -136,6 +136,9 @@ struct LEVELDB_EXPORT Options {
   // Default: currently false, but may become true later.
   bool reuse_logs = false;
 
+  bool disable_wal = true;
+  bool only_use_memtable = true;
+
   // If non-null, use the specified filter policy to reduce disk reads.
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.

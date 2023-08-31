@@ -244,28 +244,28 @@ std::string Histogram::ToString() const {
   std::snprintf(buf, sizeof(buf), "Count: %.0f  Average: %.4f  StdDev: %.2f\n",
                 num_, Average(), StandardDeviation());
   r.append(buf);
-  std::snprintf(buf, sizeof(buf), "Min: %.4f  Median: %.4f  Max: %.4f\n",
-                (num_ == 0.0 ? 0.0 : min_), Median(), max_);
+  std::snprintf(buf, sizeof(buf), "Min: %.4f  Median: %.4f  P95: %.4f  Max: %.4f\n",
+                (num_ == 0.0 ? 0.0 : min_), Median(), Percentile(95.0), max_);
   r.append(buf);
   r.append("------------------------------------------------------\n");
-  const double mult = 100.0 / num_;
-  double sum = 0;
-  for (int b = 0; b < kNumBuckets; b++) {
-    if (buckets_[b] <= 0.0) continue;
-    sum += buckets_[b];
-    std::snprintf(buf, sizeof(buf), "[ %7.0f, %7.0f ) %7.0f %7.3f%% %7.3f%% ",
-                  ((b == 0) ? 0.0 : kBucketLimit[b - 1]),  // left
-                  kBucketLimit[b],                         // right
-                  buckets_[b],                             // count
-                  mult * buckets_[b],                      // percentage
-                  mult * sum);  // cumulative percentage
-    r.append(buf);
+  // const double mult = 100.0 / num_;
+  // double sum = 0;
+  // for (int b = 0; b < kNumBuckets; b++) {
+  //   if (buckets_[b] <= 0.0) continue;
+  //   sum += buckets_[b];
+  //   std::snprintf(buf, sizeof(buf), "[ %7.0f, %7.0f ) %7.0f %7.3f%% %7.3f%% ",
+  //                 ((b == 0) ? 0.0 : kBucketLimit[b - 1]),  // left
+  //                 kBucketLimit[b],                         // right
+  //                 buckets_[b],                             // count
+  //                 mult * buckets_[b],                      // percentage
+  //                 mult * sum);  // cumulative percentage
+  //   r.append(buf);
 
-    // Add hash marks based on percentage; 20 marks for 100%.
-    int marks = static_cast<int>(20 * (buckets_[b] / num_) + 0.5);
-    r.append(marks, '#');
-    r.push_back('\n');
-  }
+  //   // Add hash marks based on percentage; 20 marks for 100%.
+  //   int marks = static_cast<int>(20 * (buckets_[b] / num_) + 0.5);
+  //   r.append(marks, '#');
+  //   r.push_back('\n');
+  // }
   return r;
 }
 

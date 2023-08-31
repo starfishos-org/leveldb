@@ -62,6 +62,14 @@ static const char* FLAGS_benchmarks =
     "snappycomp,"
     "snappyuncomp,";
 
+double get_time_ns(timespec *ts) {
+    return ts->tv_sec * 1000000.0 + ts->tv_nsec / 1000.0;
+}
+
+double get_duration(timespec *start, timespec *end) {
+    return get_time_ns(end) - get_time_ns(start);
+}
+
 // Number of key/values to place in database
 static int FLAGS_num = 1000000;
 
@@ -79,7 +87,7 @@ static int FLAGS_value_size = 100;
 static double FLAGS_compression_ratio = 0.5;
 
 // Print histogram of operation timings
-static bool FLAGS_histogram = false;
+static bool FLAGS_histogram = true;
 
 // Count the number of string comparisons performed
 static bool FLAGS_comparisons = false;
@@ -235,7 +243,7 @@ class Stats {
   int done_;
   int next_report_;
   int64_t bytes_;
-  double last_op_finish_;
+  timespec last_op_finish_;
   Histogram hist_;
   std::string message_;
 
@@ -249,7 +257,8 @@ class Stats {
     bytes_ = 0;
     seconds_ = 0;
     message_.clear();
-    start_ = finish_ = last_op_finish_ = g_env->NowMicros();
+    start_ = finish_ = g_env->NowMicros();
+    clock_gettime(0,&last_op_finish_);
   }
 
   void Merge(const Stats& other) {
@@ -273,8 +282,9 @@ class Stats {
 
   void FinishedSingleOp() {
     if (FLAGS_histogram) {
-      double now = g_env->NowMicros();
-      double micros = now - last_op_finish_;
+      timespec now;
+      clock_gettime(0,&now);
+      double micros = get_duration(&last_op_finish_,&now);
       hist_.Add(micros);
       if (micros > 20000) {
         std::fprintf(stderr, "long op: %.1f micros%30s\r", micros, "");
@@ -299,7 +309,7 @@ class Stats {
         next_report_ += 50000;
       else
         next_report_ += 100000;
-      std::fprintf(stderr, "... finished %d ops%30s\r", done_, "");
+      // std::fprintf(stderr, "... finished %d ops%30s\r", done_, "");
       std::fflush(stderr);
     }
   }
@@ -1025,6 +1035,10 @@ int main(int argc, char** argv) {
   FLAGS_open_files = leveldb::Options().max_open_files;
   std::string default_db_path;
 
+  std::fprintf(stdout, "db bench called\n");
+
+  mkdir("tmp", 0777); // for chos
+
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
@@ -1076,6 +1090,7 @@ int main(int argc, char** argv) {
   }
 
   leveldb::g_env = leveldb::Env::Default();
+  std::fprintf(stdout, "after default\n");
 
   // Choose a location for the test database if none given with --db=<path>
   if (FLAGS_db == nullptr) {

@@ -1213,7 +1213,10 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
   }
 
   // May temporarily unlock and wait.
-  Status status = MakeRoomForWrite(updates == nullptr);
+  Status status;
+  if (options_.only_use_memtable) {
+   status = MakeRoomForWrite(updates == nullptr);
+  }
   uint64_t last_sequence = versions_->LastSequence();
   Writer* last_writer = &w;
   if (status.ok() && updates != nullptr) {  // nullptr batch is for compactions
@@ -1227,23 +1230,27 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     // into mem_.
     {
       mutex_.Unlock();
-      status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
-      bool sync_error = false;
-      if (status.ok() && options.sync) {
-        status = logfile_->Sync();
-        if (!status.ok()) {
-          sync_error = true;
-        }
-      }
-      if (status.ok()) {
+      if (options_.disable_wal) {
         status = WriteBatchInternal::InsertInto(write_batch, mem_);
-      }
-      mutex_.Lock();
-      if (sync_error) {
-        // The state of the log file is indeterminate: the log record we
-        // just added may or may not show up when the DB is re-opened.
-        // So we force the DB into a mode where all future writes fail.
-        RecordBackgroundError(status);
+      } else {
+        status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
+        bool sync_error = false;
+        if (status.ok() && options.sync) {
+          status = logfile_->Sync();
+          if (!status.ok()) {
+            sync_error = true;
+          }
+        }
+        if (status.ok()) {
+          status = WriteBatchInternal::InsertInto(write_batch, mem_);
+        }
+        mutex_.Lock();
+        if (sync_error) {
+          // The state of the log file is indeterminate: the log record we
+          // just added may or may not show up when the DB is re-opened.
+          // So we force the DB into a mode where all future writes fail.
+          RecordBackgroundError(status);
+        }
       }
     }
     if (write_batch == tmp_batch_) tmp_batch_->Clear();

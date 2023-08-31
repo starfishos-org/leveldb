@@ -6,9 +6,10 @@
 #define STORAGE_LEVELDB_PORT_PORT_CONFIG_H_
 
 // Define to 1 if you have a definition for fdatasync() in <unistd.h>.
-#if !defined(HAVE_FDATASYNC)
-#cmakedefine01 HAVE_FDATASYNC
-#endif  // !defined(HAVE_FDATASYNC)
+// FIXME(FN): hide this
+// #if !defined(HAVE_FDATASYNC)
+// #cmakedefine01 HAVE_FDATASYNC
+// #endif  // !defined(HAVE_FDATASYNC)
 
 // Define to 1 if you have a definition for F_FULLFSYNC in <fcntl.h>.
 #if !defined(HAVE_FULLFSYNC)
