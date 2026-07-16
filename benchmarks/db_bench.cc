@@ -4,6 +4,7 @@
 
 #include <sys/types.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -82,6 +83,13 @@ static int FLAGS_reads = -1;
 
 // Number of concurrent threads to run.
 static int FLAGS_threads = 1;
+
+// If true, write benchmarks divide the global batch range across all workers.
+// Sequential writers receive disjoint key ranges, so --num remains the total
+// number of unique entries instead of a per-thread overwrite count.  Splitting
+// batches (rather than entries) also keeps the DB::Write call count independent
+// of --threads and leaves at most one partial batch globally.
+static bool FLAGS_write_num_is_total = false;
 
 // Size of each value
 static int FLAGS_value_size = 100;
@@ -261,6 +269,7 @@ class Stats {
   int done_;
   int next_report_;
   int64_t bytes_;
+  bool exclude_from_merge_;
   timespec last_op_finish_;
   Histogram hist_;
   std::string message_;
@@ -274,12 +283,14 @@ class Stats {
     done_ = 0;
     bytes_ = 0;
     seconds_ = 0;
+    exclude_from_merge_ = false;
     message_.clear();
     start_ = finish_ = g_env->NowMicros();
     clock_gettime(0,&last_op_finish_);
   }
 
   void Merge(const Stats& other) {
+    if (other.exclude_from_merge_) return;
     hist_.Merge(other.hist_);
     done_ += other.done_;
     bytes_ += other.bytes_;
@@ -297,6 +308,8 @@ class Stats {
   }
 
   void AddMessage(Slice msg) { AppendWithSpace(&message_, msg); }
+
+  void ExcludeFromMerge() { exclude_from_merge_ = true; }
 
   void FinishedSingleOp() {
     if (FLAGS_histogram) {
@@ -366,7 +379,8 @@ class Stats {
 struct SharedState {
   port::Mutex mu;
   port::CondVar cv GUARDED_BY(mu);
-  int total GUARDED_BY(mu);
+  // Fixed before workers start; safe to read without the coordination mutex.
+  const int total;
 
   // Each thread goes through the following states:
   //    (1) initializing
@@ -845,20 +859,44 @@ class Benchmark {
   void WriteRandom(ThreadState* thread) { DoWrite(thread, false); }
 
   void DoWrite(ThreadState* thread, bool seq) {
-    if (num_ != FLAGS_num) {
-      char msg[100];
-      std::snprintf(msg, sizeof(msg), "(%d ops)", num_);
-      thread->stats.AddMessage(msg);
-    }
-
     RandomGenerator gen;
     WriteBatch batch;
     Status s;
     int64_t bytes = 0;
     KeyBuffer key;
-    for (int i = 0; i < num_; i += entries_per_batch_) {
+    int write_begin = 0;
+    int write_end = num_;
+    if (FLAGS_write_num_is_total) {
+      const int workers = thread->shared->total;
+      const int64_t total_batches =
+          (static_cast<int64_t>(num_) + entries_per_batch_ - 1) /
+          entries_per_batch_;
+      const int64_t base = total_batches / workers;
+      const int64_t remainder = total_batches % workers;
+      const int64_t batch_begin =
+          thread->tid * base + std::min<int64_t>(thread->tid, remainder);
+      const int64_t batch_end =
+          batch_begin + base + (thread->tid < remainder ? 1 : 0);
+      write_begin = static_cast<int>(std::min<int64_t>(
+          num_, batch_begin * entries_per_batch_));
+      write_end = static_cast<int>(std::min<int64_t>(
+          num_, batch_end * entries_per_batch_));
+    }
+    if (FLAGS_write_num_is_total && write_begin >= write_end) {
+      thread->stats.ExcludeFromMerge();
+      return;
+    }
+    if (num_ != FLAGS_num) {
+      char msg[100];
+      std::snprintf(msg, sizeof(msg), "(%d ops)", num_);
+      thread->stats.AddMessage(msg);
+    }
+    for (int i = write_begin; i < write_end; i += entries_per_batch_) {
       batch.Clear();
-      for (int j = 0; j < entries_per_batch_; j++) {
+      const int batch_entries = FLAGS_write_num_is_total
+                                    ? std::min(entries_per_batch_, write_end - i)
+                                    : entries_per_batch_;
+      for (int j = 0; j < batch_entries; j++) {
         const int k = seq ? i + j : thread->rand.Uniform(FLAGS_num);
         key.Set(k);
         batch.Put(key.slice(), gen.Generate(value_size_));
@@ -986,9 +1024,34 @@ class Benchmark {
     WriteBatch batch;
     Status s;
     KeyBuffer key;
-    for (int i = 0; i < num_; i += entries_per_batch_) {
+    int write_begin = 0;
+    int write_end = num_;
+    if (FLAGS_write_num_is_total) {
+      const int workers = thread->shared->total;
+      const int64_t total_batches =
+          (static_cast<int64_t>(num_) + entries_per_batch_ - 1) /
+          entries_per_batch_;
+      const int64_t base = total_batches / workers;
+      const int64_t remainder = total_batches % workers;
+      const int64_t batch_begin =
+          thread->tid * base + std::min<int64_t>(thread->tid, remainder);
+      const int64_t batch_end =
+          batch_begin + base + (thread->tid < remainder ? 1 : 0);
+      write_begin = static_cast<int>(std::min<int64_t>(
+          num_, batch_begin * entries_per_batch_));
+      write_end = static_cast<int>(std::min<int64_t>(
+          num_, batch_end * entries_per_batch_));
+    }
+    if (FLAGS_write_num_is_total && write_begin >= write_end) {
+      thread->stats.ExcludeFromMerge();
+      return;
+    }
+    for (int i = write_begin; i < write_end; i += entries_per_batch_) {
       batch.Clear();
-      for (int j = 0; j < entries_per_batch_; j++) {
+      const int batch_entries = FLAGS_write_num_is_total
+                                    ? std::min(entries_per_batch_, write_end - i)
+                                    : entries_per_batch_;
+      for (int j = 0; j < batch_entries; j++) {
         const int k = seq ? i + j : (thread->rand.Uniform(FLAGS_num));
         key.Set(k);
         batch.Delete(key.slice());
@@ -1160,6 +1223,9 @@ int main(int argc, char** argv) {
       FLAGS_reads = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
       FLAGS_threads = n;
+    } else if (sscanf(argv[i], "--write_num_is_total=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_write_num_is_total = n;
     } else if (sscanf(argv[i], "--thread_bind_cpu_offset=%d%c", &n, &junk) == 1) {
       thread_bind_cpu_offset = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {

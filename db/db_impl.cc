@@ -1230,11 +1230,11 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     // into mem_.
     {
       mutex_.Unlock();
+      bool sync_error = false;
       if (options_.disable_wal) {
         status = WriteBatchInternal::InsertInto(write_batch, mem_);
       } else {
         status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
-        bool sync_error = false;
         if (status.ok() && options.sync) {
           status = logfile_->Sync();
           if (!status.ok()) {
@@ -1244,13 +1244,13 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
         if (status.ok()) {
           status = WriteBatchInternal::InsertInto(write_batch, mem_);
         }
-        mutex_.Lock();
-        if (sync_error) {
-          // The state of the log file is indeterminate: the log record we
-          // just added may or may not show up when the DB is re-opened.
-          // So we force the DB into a mode where all future writes fail.
-          RecordBackgroundError(status);
-        }
+      }
+      mutex_.Lock();
+      if (sync_error) {
+        // The state of the log file is indeterminate: the log record we
+        // just added may or may not show up when the DB is re-opened.
+        // So we force the DB into a mode where all future writes fail.
+        RecordBackgroundError(status);
       }
     }
     if (write_batch == tmp_batch_) tmp_batch_->Clear();

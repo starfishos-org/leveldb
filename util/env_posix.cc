@@ -43,8 +43,14 @@ namespace {
 // Set by EnvPosixTestHelper::SetReadOnlyMMapLimit() and MaxOpenFiles().
 int g_open_read_only_file_limit = -1;
 
-// Up to 1000 mmap regions for 64-bit binaries; none for 32-bit.
+// ChCore's file-backed mmap lifetime is not yet safe for LevelDB's repeated
+// SST open/close churn.  Use the existing pread path there; keep upstream's
+// mmap policy on other POSIX platforms.
+#if defined(CHCORE)
+constexpr const int kDefaultMmapLimit = 0;
+#else
 constexpr const int kDefaultMmapLimit = (sizeof(void*) >= 8) ? 1000 : 0;
+#endif
 
 // Can be set using EnvPosixTestHelper::SetReadOnlyMMapLimit().
 int g_mmap_limit = kDefaultMmapLimit;
